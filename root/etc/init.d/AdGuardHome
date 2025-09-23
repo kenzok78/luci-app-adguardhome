@@ -70,27 +70,36 @@ set_iptable()
 	commit firewall
 EOF
 
-	IPS="`ifconfig | grep "inet addr" | grep -v ":127" | grep "Bcast" | awk '{print $2}' | awk -F : '{print $2}'`"
-	for IP in $IPS
-	do
+	if command -v nft >/dev/null 2>&1; then
+		nft add table inet AdGuardHome
+		nft add chain inet AdGuardHome prerouting "{ type nat hook prerouting priority -110; policy accept; }"
+		nft add rule inet AdGuardHome prerouting "meta nfproto { ipv4, ipv6 } udp dport 53 counter redirect to :$AdGuardHome_PORT comment \"AdGuardHome HIJACK\""
 		if [ "$tcp_server" == "1" ]; then
-			iptables -t nat -I PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
+			nft add rule inet AdGuardHome prerouting "meta nfproto { ipv4, ipv6 } tcp dport 53 counter redirect to :$AdGuardHome_PORT comment \"AdGuardHome HIJACK\""
 		fi
-		iptables -t nat -I PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
-	done
+	else
+		IPS="`ifconfig | grep "inet addr" | grep -v ":127" | grep "Bcast" | awk '{print $2}' | awk -F : '{print $2}'`"
+		for IP in $IPS
+		do
+			if [ "$tcp_server" == "1" ]; then
+				iptables -t nat -I PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
+			fi
+			iptables -t nat -I PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
+		done
 
-	if [ "$ipv6_server" == 0 ]; then
-		return
+		if [ "$ipv6_server" == 0 ]; then
+			return
+		fi
+
+		IPS="`ifconfig | grep "inet6 addr" | grep -v " fe80::" | grep -v " ::1" | grep "Global" | awk '{print $3}'`"
+		for IP in $IPS
+		do
+			if [ "$tcp_server" == "1" ]; then
+				ip6tables -t nat -I PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
+			fi
+			ip6tables -t nat -I PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
+		done
 	fi
-
-	IPS="`ifconfig | grep "inet6 addr" | grep -v " fe80::" | grep -v " ::1" | grep "Global" | awk '{print $3}'`"
-	for IP in $IPS
-	do
-		if [ "$tcp_server" == "1" ]; then
-			ip6tables -t nat -I PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
-		fi
-		ip6tables -t nat -I PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $AdGuardHome_PORT >/dev/null 2>&1
-	done
 }
 
 clear_iptable()
@@ -101,23 +110,27 @@ clear_iptable()
 EOF
 	local OLD_PORT="$1"
 	local ipv6_server=$2
-	IPS="`ifconfig | grep "inet addr" | grep -v ":127" | grep "Bcast" | awk '{print $2}' | awk -F : '{print $2}'`"
-	for IP in $IPS
-	do
-		iptables -t nat -D PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
-		iptables -t nat -D PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
-	done
+	if command -v nft >/dev/null 2>&1; then
+		nft delete table inet AdGuardHome
+	else
+		IPS="`ifconfig | grep "inet addr" | grep -v ":127" | grep "Bcast" | awk '{print $2}' | awk -F : '{print $2}'`"
+		for IP in $IPS
+		do
+			iptables -t nat -D PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
+			iptables -t nat -D PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
+		done
 
-	if [ "$ipv6_server" == 0 ]; then
-		return
+		if [ "$ipv6_server" == 0 ]; then
+			return
+		fi
+		echo "warn ip6tables nat mod is needed"
+		IPS="`ifconfig | grep "inet6 addr" | grep -v " fe80::" | grep -v " ::1" | grep "Global" | awk '{print $3}'`"
+		for IP in $IPS
+		do
+			ip6tables -t nat -D PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
+			ip6tables -t nat -D PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
+		done
 	fi
-	echo "warn ip6tables nat mod is needed"
-	IPS="`ifconfig | grep "inet6 addr" | grep -v " fe80::" | grep -v " ::1" | grep "Global" | awk '{print $3}'`"
-	for IP in $IPS
-	do
-		ip6tables -t nat -D PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
-		ip6tables -t nat -D PREROUTING -p tcp -d $IP --dport 53 -j REDIRECT --to-ports $OLD_PORT >/dev/null 2>&1
-	done
 }
 
 service_triggers() {
